@@ -1,0 +1,22 @@
+WIRE1
+Thu 18 Sep 2026
+# [RETRO] Someone squeezed a full Game Boy emulator into a QR code
+A demoscene hack packs a tiny ROM plus loader into a single scannable code; the payload unpacks on-device and boots a playable build. More stunt than tool, but the size-coding tricks are the fun part.
+# [TECH] Open RISC-V laptop mainboard starts shipping
+Fully open firmware, socketed RAM, and a documented boot chain. Early benchmarks trail mainstream ARM boards but the point is repairability and no blobs.
+# [CONCEPT] Content-addressed source trees instead of file paths
+A proposal to reference code by the hash of its AST rather than by filename, so refactors and renames stop breaking history. Interesting ideas about caching builds by meaning, not text.
+# [RETRO] Preserving arcade CRT geometry in software shaders
+A deep write-up on modelling aperture-grille and shadow-mask CRTs: scanline bloom, phosphor decay, and why integer scaling alone looks wrong on modern panels.
+# [TECH] A tiny language that compiles to spreadsheet formulas
+A hobby compiler targets Excel/Sheets as its backend, turning real functions into monstrous single-cell formulas. Useless and delightful.
+# [CONCEPT] Local-first sync without a server, using CRDTs over Bluetooth
+A sketch for syncing notes between devices peer-to-peer, no cloud, merging edits deterministically. Resonates with keeping data on your own kit.
+# [RETRO] The undocumented opcodes of the 6502, mapped at last
+A multi-year effort finishes characterising every illegal opcode on the classic CPU, with hardware-verified timing. Matters for cycle-exact emulation.
+# [TECH] E-ink monitor hits 60Hz-ish refresh in grayscale
+A new panel controller trades color for speed, making e-ink almost usable for coding. Battery and eye-strain numbers look strong.
+# [CONCEPT] Compressing neural nets by treating weights as a program
+Research reframes model weights as a short generative program, hinting at very small on-device models. Early, speculative, but a genuinely new angle.
+# [RETRO] A homebrew multiplayer stack for the original Game Boy Link Cable
+Someone reverse-engineered the serial protocol and built a modern netcode layer over it, letting original hardware play over the internet via an adapter.

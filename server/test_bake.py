@@ -8,6 +8,7 @@ decision model is a FakeClient and article extraction is monkeypatched.
 
 import json
 import os
+import socket
 import tempfile
 import unittest
 
@@ -234,14 +235,14 @@ class TestCache(unittest.TestCase):
         c1 = scored("TECH", "a.com", 0)
         bake_cand = {"title": "t", "source": "a.com", "summary": "s", "link": "https://a.com/1",
                      "tag": "TECH", "weight": 0.0}
-        s1 = scorer.score_candidates([dict(bake_cand)], client, self.cache, "mv", q, "ih", "qh")
+        s1 = scorer.score_candidates([dict(bake_cand)], client, self.cache, "mv", q, "ih", "qh", progress=False)
         self.assertEqual(s1["scored_live"], 1)
         self.assertEqual(client.calls, 1)
-        s2 = scorer.score_candidates([dict(bake_cand)], client, self.cache, "mv", q, "ih", "qh")
+        s2 = scorer.score_candidates([dict(bake_cand)], client, self.cache, "mv", q, "ih", "qh", progress=False)
         self.assertEqual(s2["cache_hits"], 1)
         self.assertEqual(client.calls, 1)      # not called again
         # changing the question-set hash invalidates -> rescored
-        s3 = scorer.score_candidates([dict(bake_cand)], client, self.cache, "mv", q, "ih", "qh-NEW")
+        s3 = scorer.score_candidates([dict(bake_cand)], client, self.cache, "mv", q, "ih", "qh-NEW", progress=False)
         self.assertEqual(s3["scored_live"], 1)
         self.assertEqual(client.calls, 2)
 
@@ -272,13 +273,13 @@ class TestScoringControl(unittest.TestCase):
     def test_abort_after_five_failures(self):
         client = FakeClient(fail=True)
         with self.assertRaises(scorer.ScoringAborted):
-            scorer.score_candidates(self._cands(10), client, self.cache, "mv", self.q, "i", "q")
+            scorer.score_candidates(self._cands(10), client, self.cache, "mv", self.q, "i", "q", progress=False)
         self.assertEqual(client.calls, scorer.FIRST_FAIL_ABORT)
 
     def test_model_not_found_aborts_immediately(self):
         client = FakeClient(fail=True, code="MODEL_NOT_FOUND")
         with self.assertRaises(scorer.ScoringAborted):
-            scorer.score_candidates(self._cands(10), client, self.cache, "mv", self.q, "i", "q")
+            scorer.score_candidates(self._cands(10), client, self.cache, "mv", self.q, "i", "q", progress=False)
         self.assertEqual(client.calls, 1)
 
     def test_hung_process_ceiling(self):
@@ -291,14 +292,14 @@ class TestScoringControl(unittest.TestCase):
 
         # deadline only 25s out -> stops after ~2 candidates
         stats = scorer.score_candidates(self._cands(50), client, self.cache, "mv", self.q,
-                                        "i", "q", now=now, deadline=1025.0)
+                                        "i", "q", now=now, deadline=1025.0, progress=False)
         self.assertLess(stats["scored_live"], 50)
         self.assertGreaterEqual(stats["scored_live"], 1)
 
     def test_truncated_flag_recorded(self):
         client = FakeClient(reply={"answers": answers(), "state_truncated": True})
         cands = self._cands(1)
-        scorer.score_candidates(cands, client, self.cache, "mv", self.q, "i", "q")
+        scorer.score_candidates(cands, client, self.cache, "mv", self.q, "i", "q", progress=False)
         self.assertTrue(cands[0]["truncated"])
 
 
@@ -417,6 +418,59 @@ class TestWire1Output(unittest.TestCase):
         items = [{"tag": "TECH", "title": "H", "text": "Body text.", "src": "hackaday.com"}]
         text = bake.render(items)
         self.assertIn("— hackaday.com", text)
+
+
+class TestInterleaveCap(unittest.TestCase):
+    def _cand(self, feed, i):
+        return {"feed_name": feed, "title": "%s-%d" % (feed, i), "tag": "TECH",
+                "source": feed, "link": "https://%s/%d" % (feed, i)}
+
+    def test_under_cap_unchanged(self):
+        cands = [self._cand("a", i) for i in range(3)]
+        self.assertEqual(bake._interleave_cap(cands, 10), cands)
+
+    def test_cap_is_fair_across_feeds(self):
+        # one busy feed (20) + two quiet (2 each); cap 9 must not be all-busy
+        cands = ([self._cand("busy", i) for i in range(20)]
+                 + [self._cand("q1", i) for i in range(2)]
+                 + [self._cand("q2", i) for i in range(2)])
+        out = bake._interleave_cap(cands, 9)
+        self.assertEqual(len(out), 9)
+        feeds = {c["feed_name"] for c in out}
+        self.assertEqual(feeds, {"busy", "q1", "q2"})           # every feed represented
+        self.assertLessEqual(sum(c["feed_name"] == "busy" for c in out), 7)
+        # order within a feed preserved (newest first)
+        busy = [c["title"] for c in out if c["feed_name"] == "busy"]
+        self.assertEqual(busy, sorted(busy, key=lambda t: int(t.split("-")[1])))
+
+
+class TestClientTimeout(unittest.TestCase):
+    def test_timeout_not_retried(self):
+        client = scorer.OllayaClient(model="laya:en")
+        calls = {"n": 0}
+
+        def boom(method, path, payload=None):
+            calls["n"] += 1
+            raise socket.timeout("read timed out")
+
+        client._request = boom
+        with self.assertRaises(scorer.OllayaError) as ctx:
+            client.decide("state", {"d": {"type": "noul", "instructions": "?"}})
+        self.assertIn("timeout", str(ctx.exception))
+        self.assertEqual(calls["n"], 1)      # NOT retried (would pile load on a slow box)
+
+    def test_connection_error_retried_once(self):
+        client = scorer.OllayaClient(model="laya:en")
+        calls = {"n": 0}
+
+        def boom(method, path, payload=None):
+            calls["n"] += 1
+            raise __import__("urllib").error.URLError("connection refused")
+
+        client._request = boom
+        with self.assertRaises(scorer.OllayaError):
+            client.decide("state", {"d": {"type": "noul", "instructions": "?"}})
+        self.assertEqual(calls["n"], 2)      # original + one retry
 
 
 if __name__ == "__main__":

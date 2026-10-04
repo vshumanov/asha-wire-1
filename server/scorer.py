@@ -28,8 +28,10 @@ import hashlib
 import json
 import os
 import re
+import socket
 import sqlite3
 import statistics
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -38,6 +40,10 @@ import urllib.request
 OLLAYA_HOST = os.environ.get("OLLAYA_HOST", "http://127.0.0.1:11435").rstrip("/")
 OLLAYA_API_KEY = os.environ.get("OLLAYA_API_KEY", "")   # only sent if set (loopback needs none)
 WIRE_MODEL = os.environ.get("WIRE_MODEL", "laya:en")    # pinned tag
+# Keep the model resident through the whole run. laya:en is fp32-on-CPU and takes
+# ~14s to (re)load on a Pi 4B; without this it unloads after a few idle minutes
+# and every request after a gap pays that reload. "30m" / "0" / "-1" per Ollaya.
+KEEP_ALIVE = os.environ.get("WIRE_KEEP_ALIVE", "30m")
 
 # --------------------------------------------------------------- scoring knobs
 # Final score (0-10), per candidate:
@@ -53,12 +59,14 @@ OFFTOPIC_MAX = 0.50         # P(OFFTOPIC) above this => hard reject (news/politi
 TOPIC_OVERRIDE_MIN = 0.60   # model's topic overrides the feed's tag only above this prob
 WEIGHT_CLAMP = 1.0          # a source's weight can only nudge the score by +/- this
 MIN_SCORE_DEFAULT = 6.0     # below this never ships (ship fewer than 10 rather than pad)
-STATE_MAX_CHARS = 1200      # cap the state we send; laya:en truncates at 512 tokens regardless
+STATE_MAX_CHARS = 600       # cap the state; shorter = faster inference (title+source+blurb is plenty)
 
 BOOT_WAIT_SECONDS = 60      # retry the health check this long (cron vs. daemon boot race)
 FIRST_FAIL_ABORT = 5        # if the first N live requests all fail, give up and fall back
-HTTP_TIMEOUT = 30           # per-request, seconds
-HTTP_RETRIES = 1            # one retry on a network error (not on a 4xx)
+# A laya:en forward pass is ~20-30s on a Pi 4B CPU (ModernBERT-large, fp32), so
+# the per-request budget must sit well above that or valid inferences get clipped.
+HTTP_TIMEOUT = int(os.environ.get("WIRE_HTTP_TIMEOUT", "120"))   # per-request, seconds
+HTTP_RETRIES = 1            # one retry on a CONNECTION error only -- never on a timeout
 
 CATEGORIES = ("TECH", "RETRO", "CONCEPT")
 TOPIC_OPTIONS = {
@@ -185,7 +193,8 @@ class OllayaClient:
                 sleep(2)
 
     def decide(self, state, questions):
-        payload = {"model": self.model, "state": state, "questions": questions}
+        payload = {"model": self.model, "state": state, "questions": questions,
+                   "keep_alive": KEEP_ALIVE}
         last = None
         for attempt in range(self.retries + 1):
             try:
@@ -198,7 +207,17 @@ class OllayaClient:
                 except Exception:
                     pass
                 raise OllayaError("HTTP %s: %s" % (e.code, body[:200]), code=code)
-            except Exception as e:                          # network/timeout: one retry
+            except (socket.timeout, TimeoutError):          # slow-but-valid inference: do NOT
+                raise OllayaError("timeout after %ss" % self.timeout)   # retry (piles on load)
+            except urllib.error.URLError as e:
+                if isinstance(getattr(e, "reason", None), (socket.timeout, TimeoutError)):
+                    raise OllayaError("timeout after %ss" % self.timeout)
+                last = e                                     # genuine connection error: one retry
+                if attempt < self.retries:
+                    time.sleep(1)
+                    continue
+                raise OllayaError(str(last))
+            except Exception as e:
                 last = e
                 if attempt < self.retries:
                     time.sleep(1)
@@ -316,14 +335,23 @@ def _p95(xs):
     return s[min(len(s) - 1, int(round(0.95 * (len(s) - 1))))]
 
 
+def _heartbeat(done, total, live, cache_hits, fails, latencies):
+    med = statistics.median(latencies) if latencies else 0.0
+    sys.stderr.write("\r  scoring %d/%d  (live %d, cached %d, fail %d, med %.0fs)   "
+                     % (done, total, live, cache_hits, fails, med))
+    sys.stderr.flush()
+
+
 def score_candidates(cands, client, cache, model_ver, questions, ihash, qhash,
-                     now=time.time, deadline=None, log=lambda m: None):
+                     now=time.time, deadline=None, log=lambda m: None, progress=True):
     """Score every candidate in place (adds the score_answers keys plus
     `scored`, `cached`, `truncated`). Uses the cache; a cached key is never
     re-scored. Raises ScoringAborted if the model is missing or the first
-    FIRST_FAIL_ABORT live requests all fail. Returns a stats dict."""
+    FIRST_FAIL_ABORT live requests all fail. Returns a stats dict. With
+    `progress`, writes an updating one-line heartbeat to stderr."""
     latencies = []
-    cache_hits = live = fails = 0
+    total = len(cands)
+    cache_hits = live = fails = done = 0
     for c in cands:
         if deadline is not None and now() >= deadline:
             log("hard ceiling reached during scoring; stopping with %d scored" % live)
@@ -336,6 +364,7 @@ def score_candidates(cands, client, cache, model_ver, questions, ihash, qhash,
             c["scored"] = True
             c["cached"] = True
             cache_hits += 1
+            done += 1
             continue
         state = build_state(c.get("title", ""), c.get("source", ""), c.get("summary", ""))
         t0 = now()
@@ -345,7 +374,10 @@ def score_candidates(cands, client, cache, model_ver, questions, ihash, qhash,
             if e.code == "MODEL_NOT_FOUND":
                 raise ScoringAborted("model %r not pulled: %s" % (client.model, e))
             fails += 1
+            done += 1
             log("decide failed (%d): %s" % (fails, e))
+            if progress:
+                sys.stderr.write("\n  ! decide failed (%d): %s\n" % (fails, e))
             if live == 0 and fails >= FIRST_FAIL_ABORT:
                 raise ScoringAborted("first %d live requests all failed" % FIRST_FAIL_ABORT)
             continue
@@ -357,6 +389,13 @@ def score_candidates(cands, client, cache, model_ver, questions, ihash, qhash,
         c["scored"] = True
         c["cached"] = False
         live += 1
+        done += 1
+        if progress and (live == 1 or done % 5 == 0):
+            _heartbeat(done, total, live, cache_hits, fails, latencies)
+    if progress:
+        _heartbeat(done, total, live, cache_hits, fails, latencies)
+        sys.stderr.write("\n")
+        sys.stderr.flush()
     return {
         "cache_hits": cache_hits,
         "scored_live": live,

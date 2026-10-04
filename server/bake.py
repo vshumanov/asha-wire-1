@@ -90,7 +90,12 @@ FEEDS = [
 ]
 
 MAX_ITEMS = 10               # the sacred cap -- matches Digest.MAX_ITEMS on the phone
-POOL_PER_FEED = 15           # newest N pulled per feed before dedupe/scoring
+POOL_PER_FEED = int(os.environ.get("WIRE_POOL_PER_FEED", "8"))    # newest N per feed before scoring
+# Hard ceiling on how many candidates get scored, fairly interleaved across
+# feeds. laya:en is ~20s/candidate on a Pi 4B CPU, so this bounds the cold run;
+# the cache makes later runs cheap (only new items score). Lower it if the first
+# bake is too slow (WIRE_MAX_CANDIDATES=80 ~= 25 min cold).
+MAX_CANDIDATES = int(os.environ.get("WIRE_MAX_CANDIDATES", "120"))
 ARTICLE_CHARS = 6000         # per-article cap: a solid long read, keeps RMS happy
 MAX_PER_DOMAIN = 2           # at most this many shipped items from one source domain
 CAT_TARGET = {"TECH": 4, "CONCEPT": 3, "RETRO": 3}   # soft balance (scores still win)
@@ -315,6 +320,34 @@ def collect(feeds, cache, drop_seen=True, errors=None):
         if drop_seen and c["link"] and cache.is_seen(c["link"], SEEN_DAYS):
             continue
         out.append(c)
+    return _interleave_cap(out, MAX_CANDIDATES)
+
+
+def _interleave_cap(cands, cap):
+    """Bound the candidate pool to `cap`, round-robin across feeds so the cut is
+    fair (one busy feed can't crowd out the quiet blogs). Order within a feed is
+    preserved (newest first). Under the cap, returns the list unchanged."""
+    if cap is None or len(cands) <= cap:
+        return cands
+    groups = {}
+    order = []
+    for c in cands:
+        if c["feed_name"] not in groups:
+            groups[c["feed_name"]] = []
+            order.append(c["feed_name"])
+        groups[c["feed_name"]].append(c)
+    out = []
+    while len(out) < cap:
+        progressed = False
+        for name in order:
+            lst = groups[name]
+            if lst:
+                out.append(lst.pop(0))
+                progressed = True
+                if len(out) >= cap:
+                    break
+        if not progressed:
+            break
     return out
 
 
@@ -621,7 +654,7 @@ def cmd_eval(model_override, insecure):
             c = {"title": r["title"], "source": r["source"], "summary": "",
                  "link": r["url"], "tag": None, "weight": 0.0}
             try:
-                score_candidates([c], client, cache, mver, questions, ihash, qhash)
+                score_candidates([c], client, cache, mver, questions, ihash, qhash, progress=False)
             except ScoringAborted as e:
                 print("%-22s aborted: %s" % (model, e)); break
             if c.get("scored"):
@@ -699,7 +732,8 @@ def run_bake(out_path, use_model=True, dry_run=False, insecure=False):
                 try:
                     stats = score_candidates(cands, client, cache, mver, questions,
                                              ihash, qhash, deadline=deadline,
-                                             log=lambda m: errors.append(m))
+                                             log=lambda m: errors.append(m),
+                                             progress=sys.stderr.isatty())
                     backend = "ollaya %s (%s)" % (client.model, mver[:12])
                     log.append("scored live:%d cache-hits:%d fails:%d  latency med:%.2fs p95:%.2fs"
                                % (stats["scored_live"], stats["cache_hits"], stats["fails"],

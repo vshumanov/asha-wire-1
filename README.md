@@ -168,6 +168,27 @@ to **`server/bake.log`** (last ~14 runs kept).
 Feeds live in the `FEEDS` list at the top of `server/bake.py` — each has a
 `weight` (±1 nudge) you can lean on your favourite sources with.
 
+### Tuning for the Pi (it's CPU-only)
+
+`laya:en` is ModernBERT-large in **fp32 on CPU** — roughly **15–30 s per
+candidate** on a Pi 4B, and it loads in ~14 s. So the *cold* first bake is slow;
+after that the score cache means only new items are scored and daily runs are
+quick. Knobs (all env vars, no code edits):
+
+| var | default | what |
+|-----|---------|------|
+| `WIRE_MAX_CANDIDATES` | `120` | hard cap on items scored per bake (fairly spread across feeds). `80` ≈ 25 min cold. |
+| `WIRE_POOL_PER_FEED` | `8` | newest N pulled per feed before the cap. |
+| `WIRE_KEEP_ALIVE` | `30m` | keep laya resident through the run (avoids repeated 14 s reloads). |
+| `WIRE_HTTP_TIMEOUT` | `120` | per-request budget; must stay above a single inference time. |
+| `WIRE_MODEL` | `laya:en` | try `laya:multilingual` (322M) for a lighter, faster model. |
+| `WIRE_SEEN_DAYS` | `14` | don't reship a URL within this many days. |
+
+Run it interactively once (`bake.py --dry-run`) to see the live `scoring N/120…`
+heartbeat and time your box; then set the cron. If the digest comes out too
+short, lower `MIN_SCORE_DEFAULT` (top of `scorer.py`) from `6.0` toward `5.5` —
+laya scores interest conservatively.
+
 ## Point the phone at your server
 
 Edit one line — `Net.URL` in `src/wire/Net.java` — to your server's LAN address,

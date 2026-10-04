@@ -139,7 +139,45 @@ another model, `ollaya pull decider` (or `gliclass`, `laya:multilingual`) and
 set `WIRE_MODEL=decider`. If Ollaya must live on another LAN box, point
 `OLLAYA_HOST` at it.
 
-### Cron
+### Schedule the bake
+
+`wire.txt` is *served* by a tiny systemd unit (`wire.service` = `python3 -m
+http.server 9009 --directory /srv/wire`, read-only). The **bake** that writes it
+is separate; schedule it one of two ways.
+
+**systemd timer** (recommended — matches `wire.service`/`ollaya.service`,
+survives reboots, no login needed, journal logging, can depend on Ollaya):
+
+```ini
+# /etc/systemd/system/wire-bake.service
+[Unit]
+Description=Wire daily digest bake
+After=network-online.target ollaya.service
+Wants=network-online.target ollaya.service
+[Service]
+Type=oneshot
+User=mrc
+Nice=10
+WorkingDirectory=/srv/wire
+ExecStart=/srv/wire/venv/bin/python3 /srv/wire/bake.py -o /srv/wire/wire.txt
+# Environment=WIRE_MIN_SCORE=5.0   # knobs go here if you ever override a default
+
+# /etc/systemd/system/wire-bake.timer
+[Unit]
+Description=Run the Wire bake daily at 04:00
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+[Install]
+WantedBy=timers.target
+```
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now wire-bake.timer
+systemctl list-timers | grep wire          # next run 04:00
+sudo systemctl start wire-bake.service     # test now; journalctl -u wire-bake.service -f
+```
+
+**Or plain cron:**
 
 ```cron
 # early, under nice so it never fights the Pi; venv python; -o the served file

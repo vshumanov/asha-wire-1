@@ -350,10 +350,12 @@ def _p95(xs):
     return s[min(len(s) - 1, int(round(0.95 * (len(s) - 1))))]
 
 
-def _heartbeat(done, total, live, cache_hits, fails, latencies):
+def _heartbeat(done, total, live, cache_hits, fails, latencies, last_lat):
     med = statistics.median(latencies) if latencies else 0.0
-    sys.stderr.write("\r  scoring %d/%d  (live %d, cached %d, fail %d, med %.0fs)   "
-                     % (done, total, live, cache_hits, fails, med))
+    last = "%.2fs" % last_lat if last_lat is not None else "  -  "
+    sys.stderr.write("\r  scoring %d/%d  live %d cached %d fail %d  "
+                     "last %s  med %.2fs  p95 %.2fs      "
+                     % (done, total, live, cache_hits, fails, last, med, _p95(latencies)))
     sys.stderr.flush()
 
 
@@ -365,6 +367,7 @@ def score_candidates(cands, client, cache, model_ver, questions, ihash, qhash,
     FIRST_FAIL_ABORT live requests all fail. Returns a stats dict. With
     `progress`, writes an updating one-line heartbeat to stderr."""
     latencies = []
+    last_lat = None
     total = len(cands)
     cache_hits = live = fails = done = 0
     for c in cands:
@@ -380,6 +383,8 @@ def score_candidates(cands, client, cache, model_ver, questions, ihash, qhash,
             c["cached"] = True
             cache_hits += 1
             done += 1
+            if progress:
+                _heartbeat(done, total, live, cache_hits, fails, latencies, last_lat)
             continue
         state = build_state(c.get("title", ""), c.get("source", ""), c.get("summary", ""))
         t0 = now()
@@ -396,7 +401,8 @@ def score_candidates(cands, client, cache, model_ver, questions, ihash, qhash,
             if live == 0 and fails >= FIRST_FAIL_ABORT:
                 raise ScoringAborted("first %d live requests all failed" % FIRST_FAIL_ABORT)
             continue
-        latencies.append(now() - t0)
+        last_lat = now() - t0
+        latencies.append(last_lat)
         res = score_answers(resp.get("answers", {}), c.get("weight", 0.0), c.get("tag"))
         res["truncated"] = bool(resp.get("state_truncated", False))
         cache.put(ckey, res)
@@ -405,10 +411,10 @@ def score_candidates(cands, client, cache, model_ver, questions, ihash, qhash,
         c["cached"] = False
         live += 1
         done += 1
-        if progress and (live == 1 or done % 5 == 0):
-            _heartbeat(done, total, live, cache_hits, fails, latencies)
+        if progress:
+            _heartbeat(done, total, live, cache_hits, fails, latencies, last_lat)
     if progress:
-        _heartbeat(done, total, live, cache_hits, fails, latencies)
+        _heartbeat(done, total, live, cache_hits, fails, latencies, last_lat)
         sys.stderr.write("\n")
         sys.stderr.flush()
     return {

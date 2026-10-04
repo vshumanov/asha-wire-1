@@ -58,7 +58,11 @@ HYPE_PENALTY = 2.0
 OFFTOPIC_MAX = 0.50         # P(OFFTOPIC) above this => hard reject (news/politics/etc. leaking in)
 TOPIC_OVERRIDE_MIN = 0.60   # model's topic overrides the feed's tag only above this prob
 WEIGHT_CLAMP = 1.0          # a source's weight can only nudge the score by +/- this
-MIN_SCORE_DEFAULT = 6.0     # below this never ships (ship fewer than 10 rather than pad)
+# Below this never ships (ship fewer than 10 rather than pad). laya scores
+# interest conservatively (E rarely tops ~2.8/4 -> base ~5.6), so a bar near 5
+# admits a healthy pool while still rejecting the weak; raise it if quality dips.
+# Override per-run with WIRE_MIN_SCORE. Use `bake.py --dry-run` to see the spread.
+MIN_SCORE_DEFAULT = 5.0
 STATE_MAX_CHARS = 600       # cap the state; shorter = faster inference (title+source+blurb is plenty)
 
 BOOT_WAIT_SECONDS = 60      # retry the health check this long (cron vs. daemon boot race)

@@ -43,7 +43,7 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 
 import scorer
-from scorer import (CATEGORIES, MIN_SCORE_DEFAULT, OllayaClient, ScoringAborted,
+from scorer import (CATEGORIES, OllayaClient, ScoringAborted,
                     Cache, build_questions, interests_hash, questions_hash,
                     score_candidates)
 
@@ -100,6 +100,7 @@ ARTICLE_CHARS = 6000         # per-article cap: a solid long read, keeps RMS hap
 MAX_PER_DOMAIN = 2           # at most this many shipped items from one source domain
 CAT_TARGET = {"TECH": 4, "CONCEPT": 3, "RETRO": 3}   # soft balance (scores still win)
 SEEN_DAYS = int(os.environ.get("WIRE_SEEN_DAYS", "14"))   # never reship within this window
+MIN_SCORE = float(os.environ.get("WIRE_MIN_SCORE", str(scorer.MIN_SCORE_DEFAULT)))   # ship floor
 HARD_CEILING_SECONDS = 10800  # 3h: the only deadline -- a stuck run must not block tomorrow
 HOST_DELAY = 1.0             # polite gap between requests to the same host, seconds
 TIMEOUT = 20
@@ -744,9 +745,15 @@ def run_bake(out_path, use_model=True, dry_run=False, insecure=False):
                                % (stats["scored_live"], stats["cache_hits"], stats["fails"],
                                   stats["lat_median"], stats["lat_p95"]))
                     elig = [c for c in cands if c.get("scored") and not c.get("reject")
-                            and c.get("final", 0) >= MIN_SCORE_DEFAULT]
+                            and c.get("final", 0) >= MIN_SCORE]
                     elig.sort(key=lambda c: c.get("final", 0), reverse=True)
-                    winners = select(cands, MIN_SCORE_DEFAULT)
+                    scored_now = sorted((c.get("final", 0) for c in cands if c.get("scored")),
+                                        reverse=True)
+                    log.append("threshold:%.1f  eligible:%d  score spread: max %.2f / #10 %s / min %.2f"
+                               % (MIN_SCORE, len(elig), scored_now[0] if scored_now else 0,
+                                  ("%.2f" % scored_now[9]) if len(scored_now) >= 10 else "n/a",
+                                  scored_now[-1] if scored_now else 0))
+                    winners = select(cands, MIN_SCORE)
                     for c in winners:
                         if c.get("override"):
                             log.append("override: %s %s->%s p=%.2f  %s"

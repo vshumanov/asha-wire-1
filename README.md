@@ -182,12 +182,14 @@ quick. Knobs (all env vars, no code edits):
 | `WIRE_KEEP_ALIVE` | `30m` | keep laya resident through the run (avoids repeated 14 s reloads). |
 | `WIRE_HTTP_TIMEOUT` | `120` | per-request budget; must stay above a single inference time. |
 | `WIRE_MODEL` | `laya:en` | try `laya:multilingual` (322M) for a lighter, faster model. |
+| `WIRE_MIN_SCORE` | `5.0` | ship floor (0–10). laya scores interest conservatively, so ~5 fills the digest; raise it for a pickier, shorter wire. |
 | `WIRE_SEEN_DAYS` | `14` | don't reship a URL within this many days. |
 
-Run it interactively once (`bake.py --dry-run`) to see the live `scoring N/120…`
-heartbeat and time your box; then set the cron. If the digest comes out too
-short, lower `MIN_SCORE_DEFAULT` (top of `scorer.py`) from `6.0` toward `5.5` —
-laya scores interest conservatively.
+Run it interactively once (`bake.py --dry-run`) to see the live
+`scoring N/120  last … med …` heartbeat (real per-inference latency) and the
+score spread, then set the cron. The run summary in `bake.log` prints the
+`threshold / eligible / score spread (max / #10 / min)` so you can pick a
+`WIRE_MIN_SCORE` that ships about ten: set it near the "#10" score you see.
 
 ## Point the phone at your server
 

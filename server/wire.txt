@@ -1,22 +1,637 @@
 WIRE1
-Thu 18 Sep 2026
-# [RETRO] Someone squeezed a full Game Boy emulator into a QR code
-A demoscene hack packs a tiny ROM plus loader into a single scannable code; the payload unpacks on-device and boots a playable build. More stunt than tool, but the size-coding tricks are the fun part.
-# [TECH] Open RISC-V laptop mainboard starts shipping
-Fully open firmware, socketed RAM, and a documented boot chain. Early benchmarks trail mainstream ARM boards but the point is repairability and no blobs.
-# [CONCEPT] Content-addressed source trees instead of file paths
-A proposal to reference code by the hash of its AST rather than by filename, so refactors and renames stop breaking history. Interesting ideas about caching builds by meaning, not text.
-# [RETRO] Preserving arcade CRT geometry in software shaders
-A deep write-up on modelling aperture-grille and shadow-mask CRTs: scanline bloom, phosphor decay, and why integer scaling alone looks wrong on modern panels.
-# [TECH] A tiny language that compiles to spreadsheet formulas
-A hobby compiler targets Excel/Sheets as its backend, turning real functions into monstrous single-cell formulas. Useless and delightful.
-# [CONCEPT] Local-first sync without a server, using CRDTs over Bluetooth
-A sketch for syncing notes between devices peer-to-peer, no cloud, merging edits deterministically. Resonates with keeping data on your own kit.
-# [RETRO] The undocumented opcodes of the 6502, mapped at last
-A multi-year effort finishes characterising every illegal opcode on the classic CPU, with hardware-verified timing. Matters for cycle-exact emulation.
-# [TECH] E-ink monitor hits 60Hz-ish refresh in grayscale
-A new panel controller trades color for speed, making e-ink almost usable for coding. Battery and eye-strain numbers look strong.
-# [CONCEPT] Compressing neural nets by treating weights as a program
-Research reframes model weights as a short generative program, hinting at very small on-device models. Early, speculative, but a genuinely new angle.
-# [RETRO] A homebrew multiplayer stack for the original Game Boy Link Cable
-Someone reverse-engineered the serial protocol and built a modern netcode layer over it, letting original hardware play over the internet via an adapter.
+Sun 04 Oct 2026
+# [TECH] Instruction decoding in the Intel 8087 floating-point chip
+Instruction decoding in the Intel 8087 floating-point chip
+
+Instruction decoding in the Intel 8087 floating-point chip
+
+But how does a PC decide if an instruction was
+a floating-point instruction for the 8087 or a regular instruction for the 8086 or 8088 CPU?
+And how does the 8087 chip interpret instructions to determine what they mean?
+It turns out that decoding an instruction inside the 8087 is more complicated than you might expect.
+The 8087 uses multiple techniques, with decoding circuitry spread across the chip.
+In this blog post, I'll explain how these decoding circuits work.
+
+To reverse-engineer the 8087, I chiseled open the ceramic package of an 8087 chip and took numerous photos of the silicon die with a microscope.
+The complex patterns on the die are formed by its metal wiring, as well as the polysilicon and silicon underneath.
+The bottom half of the chip is the "datapath", the circuitry that performs calculations on 80-bit floating point values.
+At the left of the datapath, a constant ROM holds important constants such as π.
+At the right are the eight registers that the
+programmer uses to hold floating-point values; in an unusual design decision,
+these registers are arranged as a stack .
+Floating-point numbers cover a huge range by representing numbers with a fractional part and an exponent;
+the 8087 has separate circuitry to process the fractional part and the exponent.
+
+Die of the Intel 8087 floating point unit chip, with main functional blocks labeled. The die is 5 mm×6 mm. Click this image (or any others) for a larger image.
+
+The chip's instructions are defined by the large microcode ROM in the middle. 1
+To execute an instruction, the 8087 decodes the instruction and the microcode engine starts executing
+the appropriate micro-instructions from the microcode ROM.
+In the upper right part of the chip, the Bus Interface Unit (BIU) communicates with the
+main processor and memory over the computer's bus.
+For the most part, the BIU and the rest of the chip operate independently,
+but as we will see, the BIU plays important roles in instruction decoding and execution.
+
+Cooperation with the main 8086/8088 processor
+
+The 8087 chip acted as a coprocessor with the main 8086 (or 8088) processor. When a floating-point instruction was encountered,
+the 8086 would let the 8087 floating-point chip carry out the floating-point instruction.
+But how do the 8086 and the 8087 determine which chip executes a particular instruction?
+You might expect the 8086 to tell the 8087 when it should execute an instruction, but
+this cooperation turns out to be more
+complicated.
+
+The 8086 has eight opcodes that are assigned to the coprocessor, called ESCAPE opcodes.
+The 8087 determines what instruction the 8086 is executing by watching the bus,
+a task performed by the BIU (Bus Interface Unit). 2
+If the instruction is an ESCAPE , the instruction is intended for the 8087.
+However, there's a problem. The 8087 doesn't have any access to the 8086's registers (and vice versa), so the only way
+that they can exchange data is through memory.
+But the 8086 addresses memory through a complicated scheme involving offsest registers and segment registers.
+How can the 8087 determine what memory address to use when it doesn't have access to the registers?
+
+The trick is that when an ESCAPE instruction is encountered,
+the 8086 processor starts executing the instruction, even though it is intended for the 8087.
+The 8086 computes the memory address that the instruction references and
+reads that memory address, but ignores the result.
+Meanwhile, the 8087 watches the memory bus to see what address is accessed and stores this address internally in a BIU register.
+When the 8087 starts executing the instruction, it uses the address from the 8086 to read and write
+memory.
+In effect, the 8087 offloads address computation to the 8086 processor.
+
+To understand the 8087's instructions, we need to take a closer look at the structure of 8086
+instructions. In particular, something called the ModR/M byte is important since all 8087 instructions
+use it.
+
+The 8086 uses a complex system of opcodes with a mixture of single-byte opcodes, prefix bytes, and longer instructions.
+About a quarter of the opcodes use a second byte, called ModR/M,
+that specifies the registers and/or memory address
+to use through a complicated encoding.
+For instance, the memory address can be computed by adding the BX and SI registers, or from the BP register plus a two-byte offset.
+The first two bits of the ModR/M byte are the "MOD" bits. For a memory access, the MOD bits indicate
+how many address displacement bytes follow the ModR/M byte (0, 1, or 2), while
+the "R/M" bits specify how the address is computed.
+A MOD value of 3, however, indicates that the instruction operates on registers and does
+not access memory.
+
+The diagram above shows how an 8087 instruction consists of an ESCAPE opcode, followed by
+a ModR/M byte.
+An ESCAPE opcode is indicated by the special bit pattern 11011 , leaving three bits (green) available
+in the first byte to specify the type of 8087 instruction.
+As mentioned above, the ModR/M byte has two forms.
+The first form performs a memory access; it has MOD bits of 00 , 01 , or 10 and the R/M bits
+specify how the memory address is computed. This leaves three bits (green) to specify the address.
+The second form operates internally, without a memory access; it has MOD bits of 11 .
+Since the R/M bits aren't used in the second form, six bits (green) are available in the R/M byte
+to specify the instruction.
+
+The challenge for the designers of the 8087 was to fit all the instructions into the available bits
+in such a way that decoding is straightforward.
+The diagram below shows a few 8087 instructions, illustrating how they achieve this.
+The first three instructions operate internally, so they have MOD bits of 11; the green
+bits specify the particular instruction.
+Addition is more complicated because it can act on memory (first format) or registers (seco…
+
+— righto.com
+# [RETRO] Testing MacOS on the Apple Network Server 2.0 ROMs
+Old Vintage Computing Research: Testing MacOS on the Apple Network Server 2.0 ROMs
+
+ Saturday, May 2, 2026
+
+Testing MacOS on the Apple Network Server 2.0 ROMs
+
+But they've started to surface, first with an ex-Apple employee who had both the preproduction ROM and the Mac OS ROM on a flash ROM SIMM, and later another employee turned up with the NT ROM, though sadly more is needed to make it actually run NT. It turned out that I also had the preproduction ROM in a box gathering dust, and a couple months ago we put both the preproduction ROMs and NT ROMs through their paces .
+
+Well, thanks to Jeff Walther who generously built a few replica ROM DIMMs for me to test, we can now try the "2.0" MacOS ROMs on holmstock , our hard-working Apple Network Server 700 test rig ( stockholm , my original ANS 500, is still officially a production unit). And there are some interesting things to report, especially when we pit the preproduction ROMs and this set head-to-head in MacBench, and even try booting Rhapsody on it.
+
+When we last left the 700 , it still had the preproduction 1.1.20.1 ROM installed, which can be used to boot either MacOS or AIX and makes it look to MacOS like a Power Macintosh 9500, the ANS's closest relative. However, the ANS has unique hardware: two Symbios Logic 53C825A SCSI-2 Fast and Wide controllers (20MB/s) for the internal SCSI bays and on-board Cirrus Logic 54M30 graphics used in no other Apple product. MacOS never supported these and the preproduction ROM does not contain support for them, so to boot Mac OS you have to use the external 5MB/s CURIO SCSI (the ANS doesn't have the typical Power Macintosh MESH controller) and a Mac-compatible PCI video card. I selected a IMS TwinTurbo, the same card shipped with the Power Macintosh 9500, and booted it off an external BlueSCSI, both of which work well for this purpose. Once you get everything set up, versions up to at least Mac OS 9.1 are compatible, though with various annoying glitches you have to work around because it's not really a 9500.
+
+The value proposition of the 2.0 ROM is that support for Cirrus video and 53C825A SCSI comes standard — the drivers are built-in to the firmware. You can then boot Mac OS from the internal CD and install it to an internal SCSI disk at full speed, and connect your monitor directly to the ANS's VGA port (one of the only Apple systems of this era to have a standard HDI-15 video connector instead of the usual Mac DA-15). To test this, we'll unplug the BlueSCSI, remove the TwinTurbo and also take out the ANS-specific 10Mbit Ethernet card I installed because the onboard MACE Ethernet wasn't working, just in case it makes a difference. (More on that in a bit.)
+
+The ANS also has a front-mounted LCD which can be used for displaying system status or other notifications. AIX and NetBSD both directly support it. Ordinarily this would be full of diagnostics and POST messages while the system boots, but the LCD is completely blank with the 2.0 ROMs installed and never shows any activity. In fact, it's the same kind of blank you'd get if the processor board went wacky, which is a little unnerving to an old ANS hand like me.
+
+For some reason, and it could be my system because I usually have the PRAM battery out to let the logic board more quickly reset between experiments, I always had to three-finger reset it with Control-Command-Reset to get it to bong. The bong this ROM makes also seems a little truncated, and compared to regular ROMs with the extensive Long RAM test, these ROMs come up very quickly to the patterned Toolbox background. We have nothing installed it can boot from, so it almost immediately displays a gimme-disk animation, just like a regular Mac. But unlike most other Old World Macs (and the preproduction ROMs), the icon is in colour, because this is Open Firmware 2.0.
+
+I reset it again and held down Command-Option-O-F to force Open Firmware to start. This also comes up immediately, and on the main screen as it would on a regular ANS.
+
+This ROM is notable in that, besides the usual bye and boot words, there is an io word to redirect output for you. If you type ttya io at the console, it immediately switches to serial on rear port 2 at 38400bps by default. We want to see if it does anything interesting when we start it, so we'll setenv input-device ttya:57600 , setenv output-device ttya:57600 and reset-all to default it to serial startup, but we still have to hold down Cmd-Opt-O-F or it snaps back into the Toolbox ROM. Let's dump the device tree.
+
+Open Firmware, 2.0
+To continue booting the MacOS type:
+BYE<return>
+To continue booting from the default boot device type:
+BOOT<return>
+For Open Firmware serial I/O type:
+TTYA IO<return>
+ ok
+0 > printenv
+
+VARIABLE CURRENT DEFAULT
+little-endian? false false
+real-mode? false false
+auto-boot? true true
+diag-switch? false false
+fcode-debug? false false
+oem-banner? false false
+oem-logo? false false
+use-nvramrc? false false
+real-base -1 -1
+real-size 100000 100000
+virt-base -1 -1
+virt-size 100000 100000
+load-base 4000 4000
+pci-probe-list -1 -1
+screen-#columns 64 64
+screen-#rows 28 28
+selftest-#megs 0 0
+boot-device /AAPL,ROM /AAPL,ROM
+boot-file
+diag-device fd:\diags fd:\diags
+diag-file
+input-device ttya:57600 kbd
+output-device ttya:57600 screen
+oem-banner
+oem-logo
+nvramrc
+boot-command boot boot
+ ok
+0 > dev / ok
+0 > ls
+
+Children of the node:
+FF82A4C8: / [AAPL,9500 MacRISC]
+
+Node Adr Node Name Compatible
+
+FF82B8B8: /cpus@0
+FF82B9D0: /PowerPC,604@0
+FF82BDE8: /l2-cache@0,0
+FF82C528: /chosen@0
+FF82C658: /memory@0
+FF82C7A0: /openprom@0
+FF82C860: /AAPL,ROM@FFC00000
+FF82CA78: /options@0
+FF82CF28: /aliases@0
+FF82D168: /packages@0
+FF82D1F0: /deblocker@0,0
+FF82D9C8: /disk-label@0,0
+FF82E4B8: /obp-tftp@0,0
+FF830710: /mac-files@0,0
+FF832508: /mac-parts@0,0
+FF8336F0: /aix-boot@0,0
+FF833B40: /fat-files@0,0
+FF835158: /iso-9660-files@0,0
+FF835AC0: /xcoff-loader@0,0
+FF836388: /terminal-emulator@0,0
+FF836420: /bandit@F2000000
+FF837848: /gc@10
+FF837C80: /53c9…
+
+— oldvcr.blogspot.com
+# [CONCEPT] Poetry for Engineers: Safe Distance
+-->
+ Raven.config('https://6b64f5cc8af542cbb920e0238864390a@sentry.io/147999').install();
+ Poetry for Engineers: Safe Distance - IEEE Spectrum
+
+ IEEE.org IEEE Xplore IEEE Standards IEEE Job Site More Sites Sign In Join IEEE The October issue of IEEE Spectrum is here!
+
+Poetry for Engineers: Safe Distance Share FOR THE TECHNOLOGY INSIDER Explore by topic Aerospace AI Biomedical Climate Tech Computing Consumer Electronics Energy History of Technology Robotics Semiconductors Telecommunications Transportation
+ IEEE Spectrum
+ FOR THE TECHNOLOGY INSIDER Topics
+
+Enjoy more free content and benefits by creating an account
+
+Saving articles to read later requires an IEEE Spectrum account
+
+The Institute content is only available for members
+
+Downloading full PDF issues is exclusive for IEEE Members
+
+Downloading this e-book is exclusive for IEEE Members
+
+Access to
+ Spectrum
+ 's Digital Edition is exclusive for IEEE Members
+
+Following topics is a feature exclusive for IEEE Members
+
+Adding your response to an article requires an IEEE Spectrum account
+
+Create an account to access more content and features on
+ IEEE Spectrum
+ , including the ability to save articles to read later, download Spectrum Collections, and participate in
+ conversations with readers and editors. For more exclusive content and features, consider
+ Joining IEEE
+ .
+
+Join the world’s largest professional organization devoted to engineering and applied sciences and get access to
+ all of Spectrum’s articles, archives, PDF downloads, and other benefits.
+ Learn more about IEEE →
+
+Join the world’s largest professional organization devoted to engineering and applied sciences and get access to
+ this e-book plus all of
+ IEEE Spectrum’s
+ articles, archives, PDF downloads, and other benefits.
+ Learn more about IEEE →
+
+Access Thousands of Articles — Completely Free
+
+Create an account and get exclusive content and features:
+ Save articles, download collections,
+ and
+ post comments
+ — all free! For full access and benefits,
+
+ subscribe
+
+ to Spectrum .
+
+Read Danica Radovanović’s poem from our September 2026 issue
+
+Danica Radovanović is a writer and digital-society researcher based in Germany.
+
+Nicole Millman
+ How do I touch you across the ocean, across cold depths where light travels through glass.
+
+Through liquid glass, through flickering light that carries you in fragments. Light broken into pulses.
+
+You say: it’s easier this way. What are we missing like this? You smile. Safe distance.
+
+Signals slide beneath the sea, through cables thinner than trust, faster than touch, slower than longing.
+
+We stand alone, together. Synchronous, yet apart. Icons replace skin, latency replaces breath.
+
+This distance protects us. Silence that feels intentional.
+
+Everything is under control as long as nothing truly hurts.
+
+And we choose it because it shields us from what we might become if we actually met.
+
+You are my counterpoint. My response. My reflection at a safe distance.
+
+Beneath the ocean, nodes remember paths.
+
+If we get lost, we resend everything, with error, with noise, with hope.
+
+Poetry for Engineers: A Martian Rover Sends a Postcard Home ›
+
+Poetry for Engineers: Cyborg Laboratory ›
+
+Poetry for Engineers: Nine Lives of Nikola Tesla ›
+
+Poetry for Engineers: User Interface Design - IEEE Spectrum ›
+
+Digital Serendipities | Danica Radovanović | Substack ›
+
+Danica Radovanović is a writer and digital society expert based in Germany. Her work engages global policy and digital inclusion projects across the Global North and South, including service as an expert on Child Online Protection for the United Nations’ International Telecommunication Union. She is Senior Researcher at the Leibniz Institute for the Social Sciences and a former scholar at the University of North Carolina at Chapel Hill and the Oxford Internet Institute. She is the editor and contributing author of Digital Literacy and Inclusion: Stories, Platforms, Communities (Springer, 2024), and her work bridges scholarship, policy, and public writing at the intersection of technology and society.
+
+Beyond policy and research, Radovanović writes fiction and poetry. Her short stories have appeared in literary anthologies. She is the author of the short story collection Divertimento for Four Seasons and is completing her first novel, Counterpoint .
+
+For more, visit https://danicar.info or her Substack, Digital Serendipities: https://digitalserendipities.substack.com
+
+Electricity Theft Is Rampant, but Delhi Found a Fix
+
+The Future Is Fanless: 100% Heat Capture for Liquid Cooled AI Servers
+
+A Brief History of the Bloomberg Terminal
+
+Poetry for Engineers: A Martian Rover Sends a Postcard Home
+
+Poetry for Engineers: Nine Lives of Nikola Tesla
+
+— spectrum.ieee.org
+# [TECH] The stack circuitry of the Intel 8087 floating point chip, reverse-engineered
+The stack circuitry of the Intel 8087 floating point chip, reverse-engineered
+
+The stack circuitry of the Intel 8087 floating point chip, reverse-engineered
+
+Early microprocessors were very slow when operating with floating-point numbers.
+But in 1980, Intel introduced the 8087 floating-point coprocessor, performing
+floating-point operations up
+to 100 times faster.
+This was a huge benefit for IBM PC
+applications such as AutoCAD, spreadsheets, and flight simulators.
+The 8087 was so effective that today's computers still use a floating-point system based on the 8087. 1
+
+The 8087 was an extremely complex chip for its time, containing somewhere between
+40,000 and 75,000 transistors, depending on the source. 2
+To explore how the 8087 works, I opened up a chip and took numerous photos of the silicon die with a microscope.
+Around the edges of the die, you can see the hair-thin bond wires that connect the chip to its 40 external pins.
+The complex patterns on the die are formed by its metal wiring, as well as the polysilicon and silicon underneath.
+The bottom half of the chip is the "datapath", the circuitry that performs calculations on 80-bit floating point values.
+At the left of the datapath, a constant ROM holds important constants such as π.
+At the right are the eight registers that form the stack, along with the stack control circuitry.
+
+Die of the Intel 8087 floating point unit chip, with main functional blocks labeled. The die is 5mm×6mm. Click for a larger image.
+
+The chip's instructions are defined by the large microcode ROM in the middle.
+This ROM is very unusual; it is semi-analog, storing two bits per transistor by using four transistor sizes.
+To execute a floating-point instruction, the 8087 decodes the instruction and the microcode engine starts executing
+the appropriate micro-instructions from the microcode ROM.
+The decode circuitry to the right of the ROM generates the appropriate control signals from each micro-instruction.
+The bus registers and control circuitry handle interactions with the main 8086 processor and the rest of the system.
+Finally, the bias generator
+uses a charge pump to create a negative voltage to bias the chip's substrate, the underlying silicon.
+
+The stack registers and control circuitry (in red above) are the subject of this blog post.
+Unlike most processors, the 8087 organizes its registers in a stack, with instructions operating on the top of the stack.
+For instance, the square root instruction replaces the value on the top of the stack with its square root.
+You can also access a register relative to the top of the stack, for instance, adding the top value to the value two positions down from the top.
+The stack-based architecture was intended to improve the instruction set, simplify compiler design, and make function
+calls more efficient, although it didn't work as well as hoped.
+
+The stack on the 8087. From The 8087 Primer , page 60.
+
+The diagram above shows how the stack operates. The stack consists of eight registers, with the Stack Top
+(ST) indicating the current top of the stack.
+To push a floating-point value onto the stack, the Stack Top is decremented and then the value is stored in the new top register.
+A pop is performed by copying the value from the stack top and then incrementing the Stack Top.
+In comparison, most processors specify registers directly, so register 2 is always the same register.
+
+The stack registers occupy a substantial area on the die of the 8087 because floating-point numbers take many bits.
+A floating-point number consists of a fractional part (sometimes called the mantissa or significand), along with
+the exponent part; the exponent allows floating-point numbers to cover a range from extremely small to extremely
+large.
+In the 8087, floating-point numbers are 80 bits: 64 bits of significand, 15 bits of exponent, and a sign bit.
+An 80-bit register was very large in the era of 8-bit or 16-bit computers; the eight registers in the 8087
+would be equivalent to 40 registers in the 8086 processor.
+
+The registers in the 8087 form an 8×80 grid of cells. The close-up shows an 8×8 block. I removed the metal layer with acid to reveal the underlying silicon circuitry.
+
+The registers store each bit in a static RAM cell. Each cell has two inverters connected in a loop.
+This circuit forms a stable feedback loop, with one inverter on and one inverter off.
+Depending on which inverter is on, the circuit stores a 0 or a 1.
+To write a new value into the circuit, one of the lines is pulled low, flipping the loop into the desired state.
+The trick is that each inverter uses a very weak transistor to pull the output high, so its output is easily overpowered
+to change the state.
+
+Two inverters in a loop can store a 0 or a 1.
+
+These inverter pairs are arranged in an 8 × 80 grid that implements eight words of 80 bits. Each of the 80 rows has two bitlines that provide access to a bit.
+The bitlines provide both read and write access to a bit; the pair of bitlines allows either inverter to be pulled low to store the desired bit value.
+Eight vertical wordlines enable access to one word, one column of 80 bits.
+Each wordline turns on 160 pass transistors, connecting the bitlines to the inverters in the selected column.
+Thus, when a wordline is enabled, the bitlines can be used to read or write that word.
+
+Although the chip looks two-dimensional, it actually consists of multiple layers.
+The bottom layer is silicon.
+The pinkish regions below are where the silicon has been "doped" to change its electrical properties, making it an active
+part of the circuit.
+The doped silicon forms a grid of horizontal and vertical wiring, with larger doped regions in the middle.
+On top of the silicon, polysilicon wiring provides two functions. First, it provides a layer of wiring to connect the circuit.
+But more importantly, when polysilicon crosses doped silicon, it forms a transistor. The polysilicon provides the gate, turning the transistor on and off.
+In this photo, the…
+
+— righto.com
+# [TECH] Hands-on with Raspberry Pi's CM5 Programming Jig
+Hands-on with Raspberry Pi's CM5 Programming Jig
+
+In the before-times, when Raspberry Pi CM5s were (relatively) affordable, I built a number of Pi clusters ( example ), and one of the most annoying parts of the build was flashing Raspberry Pi OS to all the Pis.
+
+One, two, or even three Pis isn't a big deal, but once you hit 4+, the process of plugging the Compute Module into a carrier board, plugging that into a computer, managing Raspberry Pi Imager, and trying to match up details like a hostname, MAC address, and the physical Pi itself, gets annoying.
+
+Raspberry Pi has a solution for that, now. It's the CM5 Programming Jig (pictured above), one of which they sent for testing.
+
+Because of a tight schedule this week, I only got a few hours to get up to speed. I haven't gotten an end-to-end CM5 imaging line going, but I was able to get most of the way there.
+
+For the tl;dr, you can watch the video with an unboxing, full demonstration, and more context here:
+
+But if you enjoy reading, skip the video and carry on!
+
+Before talking about Raspberry Pi's Jig (which was developed in tandem with EDAtec ), I would be remiss not to mention Everypin's CM5 Flash Jig , which is very closely related, but works with Everypin's open source Python libraries and costs €2200 (about $2500 USD).
+
+The Raspberry Pi version costs $600, and works out of the box with Raspberry Pi's own Pi imaging/management tools, like rpi-sb-provisioner (which runs on the Jig) and pi-gen .
+
+Everypin did excellent work documenting the CM5 test points and their own Jig , but a price well over $2k makes it very difficult to justify for smaller CM5 production runs.
+
+The Raspberry Pi version is relatively expensive, but easier to justify if you're a small business (or even factory production line) provisioning hundreds or thousands of Compute Modules.
+
+Raspberry Pi has documentation for the Programming Jig, so I won't rehash all that, but the basic process is:
+
+(Assuming the Programming Jig is not already flashed): Flash Jig OS to the Jig using Raspberry Pi Imager 2.0.11 or later.
+
+Build your own Raspberry Pi .img images using pi-gen
+
+Configure the Programming Jig via it's local web UI
+
+The LED on the Jig will start flashing blue, and after a few minutes, when the CM5 is finished, it should switch to green.
+
+Just as a note, when I tried building my own Pi OS image on my Mac running macOS Tahoe, I ran the included Docker script, and had to check out the arm64 branch of the pi-gen software.
+
+Here are the contents of my config file used for image generation:
+
+RELEASE = trixie
+ ARCH = arm64
+ IMG_NAME = "jeffpios-trixie"
+ PI_GEN_RELEASE = "Jeff Geerling Pi OS"
+ USE_QEMU = 0
+
+ # Account and SSH settings
+ FIRST_USER_NAME = "jgeerling"
+ PASSWORDLESS_SUDO = 1
+ ENABLE_SSH = 1
+ PUBKEY_ONLY_SSH = 1
+ PUBKEY_SSH_FIRST_USER = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA+PT1uOv/gmUyD+Dj++gQAMrmsXmGDtUesd1CrIRD1d jeff@macmini"
+ I generated a Trixie 'Lite' image and copied that over to the Programming Jig using magic-wormhole .
+
+rpi-sb-provisioner to Provision the CM5s
+
+The provisioner has it's own web UI that you can use to monitor CM5 flashing progress. It will also log all successful runs in a local manufacturing database with information about the CM5's MAC address, serial number, and hardware specs.
+
+I guess it's up to you to feed that data into other manufacturing systems, labeling workflows, etc. And larger operations would certainly have more automation for loading and unloading CM5s. It wouldn't surprise me if Raspberry Pi themselves use this or a version of it in their own manufacturing lines.
+
+I know they were working on CM4 test jigs years ago when I visited the Sony factory (see photo above), but it used the more fragile Hirose connectors, which are only rated for around 30 insertions before signal integrity is not guaranteed. I can imagine feeding a thousand Pis a day into those connectors was a recipe for annoying quirks!
+
+Instead, the Programming Jig has a 'bed of nails' (a bunch of pogo pins) which target test pad locations on the bottom of every CM5:
+
+Much more repeatable, and this is the same kind of setup I saw them using for Pi 4 production when I visited their factory.
+
+Honestly, this is not something an individual tinkerer could justify buying, even if you manage a few small Pi clusters. But to some small businesses and systems integrators, the CM5 Jig will be immensely useful.
+
+And in 5-10 years, if you start seeing these things show up in used factory surplus, know that they have a little CM5 tucked inside you could harvest :)
+
+Upgrading my Open Source Pi Surveillance Server with Frigate
+
+Raspberry Pi CM5 is 2-3x faster, drop-in upgrade (mostly)
+
+— jeffgeerling.com
+# [TECH] Before NTP there were Time and Daytime
+In building an NTP time demo on old Macs for VCF Midwest , I came across RFC 867 and RFC 868 , for the 'Daytime' and 'Time' Protocols, respectively.
+
+My first exposure to any form of network time was when I upgraded from a used PowerBook 180c to my first 'new' computer, a Power Mac G3, in 2000. With the introduction of Mac OS 8.5, Apple added a 'Network Time Server' option in the Date & Time Control Panel.
+
+I remember dialing up the Internet via PPP, then clicking the 'Set Time Now' button, and seeing my computer's clock update. I didn't think much of it at the time, but this was way more than setting my wristwatch using the 'Time and Temperature' phone line, which was previously the most precise time source I could access regularly.
+
+But prior to NTP ( RFC 1059 in 1988), there was a much more informal way of requesting time from a remote server. With the Time Protocol (RFC 868), a time request was as simple as:
+
+Open a connection to the server on port 37 (TCP connect, or send an empty UDP datagram)
+
+Receive the time as a 32-bit binary number
+
+In the mid-80s, this was an extremely efficient method of time transfer, which was helpful since network bytes were precious, and you didn't need a complex routine to handle the 32-bit time.
+
+But there are downsides to this simplistic approach. Especially if you were routing the request through the Internet, with multiple non-deterministic hops:
+
+The 32-bit number was just "seconds since 00:00 (midnight) 1 January 1900
+GMT", so the best timing resolution you could ever get is 1 second (NTP gives 64-bit resolution, which can scale past microseconds).
+
+There is no timestamping of the actual request or response, so there's no way to account for network delays, or average them out over time.
+
+The 32-bit integer value will run out on February 7, 2036, resulting in a 'Y2K36' bug similar to the Unix Y2K38 Epochalypse . (NTP has the same problem but introduced Eras to deal with it.)
+
+But in 1983, when the RFC was introduced, it was just a convenient way for a computer on a network to get time from a server with a stable clock (many computers didn't have a real-time clock). It wasn't used for critical services like distributed databases, especially since timing resolution beyond 1 second wasn't that common in computing (assuming you even had a world clock!).
+
+The Daytime protocol (RFC 867) is succinct, but ambiguous. It defines a protocol by which an entire day and timestamp can be returned in human-readable output, for example:
+
+Tuesday, February 22, 1982 17:37:43-PST
+ The ambiguity comes with the format, which is left to the implementor:
+
+There is no specific syntax for the daytime. It is recommended that
+ it be limited to the ASCII printing characters, space, carriage
+ return, and line feed. The daytime should be just one line.
+
+ One popular syntax is:
+
+ Weekday, Month Day, Year Time-Zone
+
+ Example:
+
+ Tuesday, February 22, 1982 17:37:43-PST
+ Immediately following, it suggests the alternative dd mmm yy hh:mm:ss zzz , which was used for SMTP!
+
+Fun fact: NIST still runs RFC 867/868 Daytime services on time.nist.gov !
+
+$ nc time.nist.gov 13
+
+ 61281 26-08-29 23:31:43 50 0 0 771.1 UTC(NIST) *
+ This is using a customized response that matches neither of the RFC formats:
+
+JJJJJ YR-MO-DA HH:MM:SS TT L H msADV UTC(NIST) OTM
+ Where JJJJJ is the Modified Julian Date , and the OTM is an 'on-time marker', which marks that the time should be correct the moment you receive it... but from my research is more of a 'best guess' that was more useful in older telephone time systems 1 , which were in some ways more deterministic.
+
+NIST's is definitely one of the stranger time formats I've seen!
+
+The Time and Daytime Protocols were both shepherded by Jon Postel , a.k.a. the 'God of the Internet', known for other hits like SMTP, IANA, and Postel's law .
+
+I often wonder what it was like to be on the ground floor when these protocols and services were written. I was more worried about getting time on my family's Nintendo. Not that my toddler brain could've comprehended network time transfer back then!
+
+After taking a nice long detour learning about Time and Daytime, I decided I would add some easter eggs at my booth at VCF Midwest—one of them being Time/Daytime services on ports 37 and 13, respectively.
+
+If you want to run your own Time/Daytime server, it's easy in Linux—they're built into xinetd . These instructions are for Pi OS / Debian, but it's similar on other distros:
+
+ # Install and enable xinetd
+ sudo apt install xinetd
+ sudo systemctl enable xinetd
+
+ # Edit time and daytime configurations
+ sudo nano /etc/xinetd.d/time
+ -> service time tcp set disable to "no"
+ -> service time udp set disable to "no"
+
+ sudo nano /etc/xinetd.d/daytime
+ -> service daytime tcp set disable to "no"
+ -> service daytime udp set disable to "no"
+
+ # Restart xinetd
+ sudo systemctl restart xinetd
+ Make sure ports 37 and 13 are open on your firewall, then from another computer on the network:
+
+ # Time
+ $ nc 10 . 0 . 37 . 60 37 | xxd - g 1
+ 00000000 : ee 3 f 24 b3 . ? $ .
+
+ # Verify the Time value by passing it into `date`:
+ $ date - r $ (( 0 xee3f24c8 - 2208988800 ))
+ Sun Aug 30 16 : 53 : 12 CDT 2026
+
+ # Daytime
+ $ nc - v 10 . 0 . 37 . 60 13
+ Connection to 10 . 0 . 37 . 60 port 13 [tcp / daytime] succeeded !
+ 30 AUG 2026 16 : 49 : 26 CDT
+ The 2208988800 in the date translation command above is the difference (in seconds) between 1900 and 1970, required because UNIX time 's epoch is in 1970 (versus 1900 for Time and NTP).
+
+If you'll be at VCF Midwest—especially if you have a vintage computer with Networking attached to the show's network—I can give you a good Time. Or Daytime, for that matter!
+
+Apparently NIST's ACTS dial-up time service is still used 200-300 times per day!  ↩︎
+
+NIST was 5 μs off UTC after last week's power cut
+
+NTP, an atomic clock, and having a great time at the world's largest VCF
+
+Rebuilding a 1995 GPS Time Server so I don't get Telstra'd
+
+— jeffgeerling.com
+# [CONCEPT] Engineering Multipole Resonances in Dielectric Metasurfaces for Transmission, Reflection, and Absorption Control
+Dielectric metasurfaces have moved to the forefront of nanophotonics, offering flat, low-loss alternatives to conventional bulk optical elements for controlling the amplitude, phase, and polarization of light. These structures are of growing interest to researchers and engineers working on sensing, energy harvesting, and flat optics, as their performance hinges on precisely engineered optical resonances. Full-wave finite element simulation, combined with semianalytical multipole decomposition in the COMSOL Multiphysics® software, gives us a way to not only predict these resonances but also uncover their underlying physical origins. In this webinar, Dr. Pavel Terekhov, postdoctoral researcher at National Institute of Standards and Technology, will trace how a single quadrumer meta-atom, originally studied for its magnetic octupole response, evolves into two distinct light manipulation regimes. He will first revisit the foundational single-particle results that motivated this work, then show how arranging quadrumers into a periodic crystalline silicon metasurface produces anomalous absorption enhancement, governed by two independent multipole mechanisms coexisting in the same structure. Building on this, he will then introduce ongoing work on a gallium nitride metasurface, where the complex interplay of four different multipoles is used to sculpt reflection and transmission spectra including the quasi-bound-states-in-the-continuum (q-BIC) manipulation. Attendees will see how COMSOL Multiphysics® and multipole decomposition connect full-wave simulation and analytical insight, turning abstract resonance behavior into physically interpretable design rules. The broader takeaway is that multipole-based simulation is not just a diagnostic tool but a design strategy: It enables the on-demand tailoring of absorption, reflection, and transmission in dielectric metasurfaces, with direct relevance to sensing, energy harvesting, and future optical device applications. Key Takeaways: Learn about modeling multipole resonances in dielectric metasurfaces using full-wave finite element simulation and semianalytical multipole decomposition in COMSOL Multiphysics®. See how multipole-based simulation can be used to understand and control absorption, reflection, and transmission in silicon and gallium nitride metasurfaces. Explore how different multipole mechanisms, including quasi-bound states in the continuum (q-BICs), can be engineered to tailor optical responses for sensing, energy harvesting, and flat optics. Gain insights into how simulation and multipole decomposition can help researchers and engineers turn complex resonance behavior into practical design strategies for future optical devices. Register now for this free webinar!
+
+(full text unavailable — summary only)
+
+— event.on24.com
+# [CONCEPT] Parallel Reads and Write Optimization for Large-Scale Data Replication
+-->
+
+
+
+
+
+
+
+
+
+ 76% Faster Replication. Same Infrastructure. - Wiley Science and Engineering Content Hub
+
+ LOG IN
+
+Forgot Password? Not registered yet? Click here to register now.
+
+Already registered? Click here to log in to the hub.
+
+Download this complimentary White Paper today!
+
+This White Paper gives data engineers and architects a practical overview of how parallel partitioned reads, write-path optimization, and cloud-native bulk loading reduce large-table replication times, and why replication speed has become a business concern as data volumes grow.
+
+Why large-table replication has outgrown traditional overnight batch windows, and how rising data volumes move the bottleneck from the data itself to the architecture that moves it.
+
+How parallel partitioned reads split a large source table into simultaneous multi-threaded reads across available CPU cores.
+
+How write-path optimizations lower per-file and per-column overhead on the destination side, with the largest gains on wide, high-column tables.
+
+How to tune partition count and size, apply cloud-native bulk loading into common data warehouses, and adopt a repeatable configuration for large-scale workloads.
+
+IEEE Spectrum and Wiley are proud to bring you this White Paper, sponsored by CData
+
+As enterprise data volumes grow, replication pipelines built for smaller loads often stop scaling cleanly. Jobs that once finished overnight begin to run into business hours, freshness gaps widen, and compute costs climb. At that point the constraint shifts from the size of the data to the efficiency of the architecture that reads and writes it. Two techniques address this directly. Parallel partitioned reads divide a large source table into row-range partitions and read them at the same time across CPU threads, which reduces read time on large datasets. Write-path optimizations lower the cost of processing result metadata and writing files on the destination side. Wide tables with hundreds of columns benefit most, since per-column work repeats across every file operation. Both techniques build on cloud-native bulk loading, which stages data as optimized files and loads it through a warehouse’s native ingestion interface for higher throughput than row-by-row writes. This White Paper explains the benchmark methodology, reports measured results across common cloud destinations, and outlines a practical configuration for applying these techniques to large-scale replication.
+
+First register your details to create a user profile for the hub, then login to access all content within the hub.
+
+Already registered? Click here to log in to the hub.
+
+CData is the data layer that makes AI work in production—live connectivity and replication across hundreds of the most critical enterprise sources, semantic context, and built-in governance. Powering AI for Databricks, Microsoft, Google, Palantir, and 10,000+ customers worldwide.
+
+IEEE Spectrum Magazine, the flagship publication of the IEEE, explores the development, applications and implications of new technologies. It anticipates trends in engineering, science, and technology, and provides a forum for understanding, discussion and leadership in these areas.
+
+2026 State of Visual and Physical AI: A Survey of 700+ Practitioners
+
+1. Same tier 3 topics + same sponsor [2], 2. Same tier 2 topics + same sponsor [2], 3. Any topic + same sponsor [2], 2. Same tags + same sponsor [2], 3. Same sponsor [2],
+
+Aerial Cable Systems for Substation Exit Construction
+
+Single-Phase Direct Liquid Cooling Is Proven for the Next Decade of Ultra-Dense Compute
+
+Efficient and Accurate Prediction of Cosite Isolation on Large Platforms
+
+1. Same tier 3 topics + same partner [3],
+
+— content.knowledgehub.wiley.com
+# [TECH] The Python on Microcontrollers Newsletter: subscribe for free
+The  Python for Microcontrollers  Newsletter  is the place for the latest news involving Python on hardware ( microcontrollers  AND single board computers like  Raspberry Pi ).
+
+This  ad-free, spam-free  weekly email is filled with  CircuitPython ,  MicroPython , and  Python information that you may have missed, all in one place!
+
+You get a summary of all the software, events, projects, and the latest hardware worldwide once a week, no ads! You can cancel anytime.
+
+It arrives about 11 am Monday (US Eastern time) with all the week’s happenings.
+
+And please tell your friends, colleagues, students, etc.
+
+— blog.adafruit.com

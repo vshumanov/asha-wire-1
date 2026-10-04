@@ -5,3 +5,11 @@ dist/
 *.class
 .DS_Store
 __pycache__/
+
+# server runtime state (per-machine, not versioned)
+server/.wirecache.db
+server/.bake.lock
+server/bake.log
+server/last_bake.json
+server/labels.tsv
+server/wire.txt.tmp

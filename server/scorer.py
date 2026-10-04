@@ -55,7 +55,11 @@ KEEP_ALIVE = os.environ.get("WIRE_KEEP_ALIVE", "30m")
 INTEREST_SCALE = 2.0        # 5 levels => E in [0,4] => base in [0,8]
 DEPTH_BONUS = 1.5
 HYPE_PENALTY = 2.0
-OFFTOPIC_MAX = 0.50         # P(OFFTOPIC) above this => hard reject (news/politics/etc. leaking in)
+# P(OFFTOPIC) above this => hard reject (news/politics/etc. leaking in). laya's
+# offtopic mass tends to run low even for newsy items, so 0.5 lets obituaries /
+# PR through; 0.30 is a stricter default that honours the no-news rule without
+# much collateral. Tune with WIRE_OFFTOPIC_MAX; see the `off=` column in --dry-run.
+OFFTOPIC_MAX = float(os.environ.get("WIRE_OFFTOPIC_MAX", "0.30"))
 TOPIC_OVERRIDE_MIN = 0.60   # model's topic overrides the feed's tag only above this prob
 WEIGHT_CLAMP = 1.0          # a source's weight can only nudge the score by +/- this
 # Below this never ships (ship fewer than 10 rather than pad). laya scores
@@ -78,8 +82,9 @@ TOPIC_OPTIONS = {
     "TECH": "hardware, software, programming, computing tools, or an engineering build",
     "RETRO": "retro computing, vintage hardware or consoles, or game preservation and history",
     "CONCEPT": "a science or engineering concept, mechanism or idea explained in depth",
-    "OFFTOPIC": ("current events, news, politics, business or finance, celebrity, "
-                 "culture-war, or cryptocurrency"),
+    "OFFTOPIC": ("current events, breaking news, politics, business or finance, "
+                 "an obituary or someone's death, a company or personnel announcement, "
+                 "a deal or sale, celebrity, culture-war, or cryptocurrency"),
 }
 INTEREST_LEVELS = [
     "not interesting at all",

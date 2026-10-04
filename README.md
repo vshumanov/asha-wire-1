@@ -20,11 +20,12 @@ it is **bounded and finishable** — ten items, then nothing more.
 The phone is dumb; the server does the messy web work — exactly like the
 Reader's desktop converter.
 
-- **On the home server**, `server/bake.py` fetches your feeds, keeps the newest
-  per category, interleaves them, hard-caps at **10**, and — for each one —
-  **fetches the article and extracts the readable full text**, baking it all
-  into one `wire.txt` in the `WIRE1` line-format. Curation lives here (edit
-  `FEEDS`); extraction is best with `pip install trafilatura` (see below).
+- **On the home server**, `server/bake.py` fetches your feeds, **scores every
+  candidate with a local decision model** (see *Taste ranking* below), ships the
+  best that clear a bar — hard-capped at **10** — and, for each one, **fetches
+  the article and extracts the readable full text**, baking it all into one
+  `wire.txt` in the `WIRE1` line-format. Curation lives here (edit `FEEDS` and
+  `interests.md`); extraction is best with `pip install trafilatura` (see below).
 - **On the phone**, Wire does one HTTP GET of that file over the LAN, stores it
   in RMS, and shows a **headline index** you pick from. Selecting a headline
   opens the **full article** to read; back returns to the index.
@@ -67,6 +68,105 @@ cd /srv/wire && python3 -m http.server 9009
 
 A ready-made `server/wire.txt` is included so you can test the phone before
 wiring up feeds.
+
+## Taste ranking (local decision model)
+
+By default the bake no longer ships "newest 5 per category". It **scores every
+candidate with a local decision model** and ships the best that clear a bar —
+so the ten reflect taste, not recency. The model is `laya:en` (Convai's 421M
+ModernBERT decision head, Apache-2.0) served by **[Ollaya](https://ollaya.dev)**
+("Ollama for decision models"). It runs entirely on the Pi: no cloud, no keys,
+no text generation — laya scores a fixed set of typed answers in one forward
+pass, so there is nothing to hallucinate. If Ollaya is down it falls back to the
+old newest-first curation, so a bad model day still yields a wire.
+
+**How it scores.** For each candidate the bake sends the title + source + feed
+blurb (never the full article) and asks four batched questions: `interest`
+(a 5-level score built from your `interests.md`), `topic` (TECH / RETRO /
+CONCEPT / OFFTOPIC), `hype` and `depth`. The final 0–10 score is the expected
+interest, plus a depth bonus, minus a hype penalty, plus the per-source weight.
+Anything the model calls OFFTOPIC (news, politics, finance, crypto, …) is
+hard-rejected — that is how current-events leakage from HN/aggregators is kept
+out. Constants live at the top of `server/scorer.py`; the threshold is 6.0.
+
+### Install Ollaya + laya on the Pi
+
+Ollaya ships a prebuilt **Linux arm64** binary, but it needs **glibc ≥ 2.38** —
+that means **Raspberry Pi OS *Trixie* (Debian 13) or Ubuntu 24.04+** on the Pi 4B.
+On older Pi OS (Bookworm, glibc 2.36) use the CPU **Docker** image instead.
+
+```bash
+# A) native (Pi OS Trixie / Ubuntu 24.04+, arm64):
+curl -fsSL https://ollaya.dev/install.sh | sh
+ollaya pull laya:en            # ~850 MB; ModernBERT-large, onnxruntime, CPU-only on the Pi
+
+# B) or Docker (any Pi OS):
+docker run -d --restart=always -p 127.0.0.1:11435:11435 \
+  -v ollaya:/root/.ollaya --name ollaya ghcr.io/ollaya-dev/ollaya
+docker exec ollaya ollaya pull laya:en
+```
+
+laya:en needs **~0.85–1.5 GB RAM** resident while loaded (it auto-unloads after
+a few idle minutes), so a 4 GB Pi 4B is fine. Expect a second or two per
+candidate on the Pi's CPU — the bake is allowed to be slow.
+
+Run Ollaya as a service so cron can rely on it (skip if you used Docker A/B with
+`--restart=always`):
+
+```ini
+# /etc/systemd/system/ollaya.service
+[Unit]
+Description=Ollaya decision-model server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ollaya serve
+Restart=always
+RestartSec=3
+# Environment=OLLAYA_HOST=0.0.0.0:11435   # only to serve other LAN machines
+
+[Install]
+WantedBy=multi-user.target
+```
+```bash
+sudo systemctl enable --now ollaya
+```
+
+The bake talks to `http://127.0.0.1:11435` by default (override with
+`OLLAYA_HOST`; set `OLLAYA_API_KEY` only if you put auth in front of it). To try
+another model, `ollaya pull decider` (or `gliclass`, `laya:multilingual`) and
+set `WIRE_MODEL=decider`. If Ollaya must live on another LAN box, point
+`OLLAYA_HOST` at it.
+
+### Cron
+
+```cron
+# early, under nice so it never fights the Pi; venv python; -o the served file
+30 5 * * *  nice -n 10 /srv/wire/venv/bin/python3 /srv/wire/bake.py -o /srv/wire/wire.txt
+```
+Read the digest around 05:45. Move the hour earlier if the bake runs long (it
+has a 3 h hard ceiling and will ship whatever it has ranked rather than block
+tomorrow). The bake is quiet on stdout, writes errors to stderr, and appends a
+run summary (backend, candidates, cache hits, latency, shipped titles+scores)
+to **`server/bake.log`** (last ~14 runs kept).
+
+### Edit your taste, then teach it
+
+- **`server/interests.md`** — plain-prose Likes/Dislikes the `interest` question
+  is built from. Editing it re-scores everything on the next bake (its hash is
+  part of the score cache key).
+- **`server/bake.py --like 3 7`** / **`--dislike 5`** — after reading, label items
+  by their number from the last bake (a title or URL substring works too). This
+  appends to `server/labels.tsv`. Make it a habit; it is instant.
+- **`server/bake.py --eval`** — scores your labels and prints ranking accuracy
+  (AUC), mean score per class, the worst misses, and flags any question with no
+  signal. `--eval --model decider` compares another model on the same labels.
+- **`--dry-run`** prints the ranked table and writes nothing; **`--no-model`**
+  forces the legacy newest-first path.
+
+Feeds live in the `FEEDS` list at the top of `server/bake.py` — each has a
+`weight` (±1 nudge) you can lean on your favourite sources with.
 
 ## Point the phone at your server
 

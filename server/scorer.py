@@ -67,6 +67,7 @@ FIRST_FAIL_ABORT = 5        # if the first N live requests all fail, give up and
 # the per-request budget must sit well above that or valid inferences get clipped.
 HTTP_TIMEOUT = int(os.environ.get("WIRE_HTTP_TIMEOUT", "120"))   # per-request, seconds
 HTTP_RETRIES = 1            # one retry on a CONNECTION error only -- never on a timeout
+WARMUP_TIMEOUT = int(os.environ.get("WIRE_WARMUP_TIMEOUT", "300"))   # absorb the cold model load
 
 CATEGORIES = ("TECH", "RETRO", "CONCEPT")
 TOPIC_OPTIONS = {
@@ -156,15 +157,29 @@ class OllayaClient:
         self.timeout = timeout
         self.retries = retries
 
-    def _request(self, method, path, payload=None):
+    def _request(self, method, path, payload=None, timeout=None):
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
         req = urllib.request.Request(self.host + path, data=data, method=method)
         if payload is not None:
             req.add_header("Content-Type", "application/json")
         if self.api_key:
             req.add_header("Authorization", "Bearer " + self.api_key)
-        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
             return json.loads(r.read().decode("utf-8"))
+
+    def warmup(self, timeout=WARMUP_TIMEOUT):
+        """Force the model to load (and run its first-pass warmup) with a
+        generous timeout, so the cold load never clips the first real request.
+        Returns the model-load seconds, or None if warmup failed."""
+        t0 = time.time()
+        try:
+            self._request("POST", "/api/decide", timeout=timeout, payload={
+                "model": self.model, "keep_alive": KEEP_ALIVE,
+                "state": "warmup", "questions": {
+                    "_w": {"type": "noul", "instructions": "Is this a warmup?"}}})
+            return time.time() - t0
+        except Exception:
+            return None
 
     def version(self):
         return self._request("GET", "/api/version").get("version", "")

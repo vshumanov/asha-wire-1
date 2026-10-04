@@ -459,6 +459,13 @@ class TestClientTimeout(unittest.TestCase):
         self.assertIn("timeout", str(ctx.exception))
         self.assertEqual(calls["n"], 1)      # NOT retried (would pile load on a slow box)
 
+    def test_warmup_returns_seconds_then_none_on_failure(self):
+        client = scorer.OllayaClient(model="laya:en")
+        client._request = lambda *a, **k: {"answers": {}}
+        self.assertIsInstance(client.warmup(timeout=1), float)
+        client._request = lambda *a, **k: (_ for _ in ()).throw(socket.timeout())
+        self.assertIsNone(client.warmup(timeout=1))
+
     def test_connection_error_retried_once(self):
         client = scorer.OllayaClient(model="laya:en")
         calls = {"n": 0}

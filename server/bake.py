@@ -729,6 +729,11 @@ def run_bake(out_path, use_model=True, dry_run=False, insecure=False):
                 questions = build_questions(itext)
                 ihash, qhash = interests_hash(itext), questions_hash(questions)
                 mver = client.model_version()
+                warm = client.warmup()           # absorb the cold model load up front
+                log.append("model warmup: %s" % ("%.1fs" % warm if warm is not None else "failed"))
+                if sys.stderr.isatty():
+                    sys.stderr.write("  model warmed in %s\n"
+                                     % ("%.1fs" % warm if warm is not None else "— (load failed)"))
                 try:
                     stats = score_candidates(cands, client, cache, mver, questions,
                                              ihash, qhash, deadline=deadline,

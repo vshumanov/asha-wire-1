@@ -95,7 +95,7 @@ POOL_PER_FEED = int(os.environ.get("WIRE_POOL_PER_FEED", "8"))    # newest N per
 # feeds. laya:en is ~20s/candidate on a Pi 4B CPU, so this bounds the cold run;
 # the cache makes later runs cheap (only new items score). Lower it if the first
 # bake is too slow (WIRE_MAX_CANDIDATES=80 ~= 25 min cold).
-MAX_CANDIDATES = int(os.environ.get("WIRE_MAX_CANDIDATES", "120"))
+MAX_CANDIDATES = int(os.environ.get("WIRE_MAX_CANDIDATES", "80"))
 ARTICLE_CHARS = 6000         # per-article cap: a solid long read, keeps RMS happy
 MAX_PER_DOMAIN = 2           # at most this many shipped items from one source domain
 CAT_TARGET = {"TECH": 4, "CONCEPT": 3, "RETRO": 3}   # soft balance (scores still win)

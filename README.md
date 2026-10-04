@@ -143,13 +143,14 @@ set `WIRE_MODEL=decider`. If Ollaya must live on another LAN box, point
 
 ```cron
 # early, under nice so it never fights the Pi; venv python; -o the served file
-30 5 * * *  nice -n 10 /srv/wire/venv/bin/python3 /srv/wire/bake.py -o /srv/wire/wire.txt
+0 4 * * *  nice -n 10 /srv/wire/venv/bin/python3 /srv/wire/bake.py -o /srv/wire/wire.txt
 ```
-Read the digest around 05:45. Move the hour earlier if the bake runs long (it
-has a 3 h hard ceiling and will ship whatever it has ranked rather than block
-tomorrow). The bake is quiet on stdout, writes errors to stderr, and appends a
-run summary (backend, candidates, cache hits, latency, shipped titles+scores)
-to **`server/bake.log`** (last ~14 runs kept).
+Read the digest with your coffee; the 04:00 start leaves plenty of margin (a
+cold run of 80 candidates is ~40 min at ~30 s each; cached daily runs are
+minutes). It has a 3 h hard ceiling and will ship whatever it has ranked rather
+than block tomorrow. The bake is quiet on stdout, writes errors to stderr, and
+appends a run summary (backend, candidates, cache hits, latency, shipped
+titles+scores) to **`server/bake.log`** (last ~14 runs kept).
 
 ### Edit your taste, then teach it
 
@@ -177,7 +178,7 @@ quick. Knobs (all env vars, no code edits):
 
 | var | default | what |
 |-----|---------|------|
-| `WIRE_MAX_CANDIDATES` | `120` | hard cap on items scored per bake (fairly spread across feeds). `80` ≈ 25 min cold. |
+| `WIRE_MAX_CANDIDATES` | `80` | hard cap on items scored per bake (fairly spread across feeds). ~40 min cold at ~30 s/item; raise for coverage, lower for speed. |
 | `WIRE_POOL_PER_FEED` | `8` | newest N pulled per feed before the cap. |
 | `WIRE_KEEP_ALIVE` | `30m` | keep laya resident through the run (avoids repeated 14 s reloads). |
 | `WIRE_HTTP_TIMEOUT` | `120` | per-request budget; must stay above a single inference time. |
@@ -186,7 +187,7 @@ quick. Knobs (all env vars, no code edits):
 | `WIRE_SEEN_DAYS` | `14` | don't reship a URL within this many days. |
 
 Run it interactively once (`bake.py --dry-run`) to see the live
-`scoring N/120  last … med …` heartbeat (real per-inference latency) and the
+`scoring N/80  last … med …` heartbeat (real per-inference latency) and the
 score spread, then set the cron. The run summary in `bake.log` prints the
 `threshold / eligible / score spread (max / #10 / min)` so you can pick a
 `WIRE_MIN_SCORE` that ships about ten: set it near the "#10" score you see.
